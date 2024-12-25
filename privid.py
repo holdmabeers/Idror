@@ -15,7 +15,7 @@ from urllib3.util.retry import Retry
 
 # Banner
 banner = """
-    github:holmabeer<3
+    github:holdmabeers<3
 
     ██████╗░██████╗░██╗██╗░░░██╗██╗██████╗░
     ██╔══██╗██╔══██╗██║██║░░░██║██║██╔══██╗
@@ -23,7 +23,7 @@ banner = """
     ██╔═══╝░██╔══██╗██║░╚████╔╝░██║██║░░██║
     ██║░░░░░██║░░██║██║░░╚██╔╝░░██║██████╔╝
     ╚═╝░░░░░╚═╝░░╚═╝╚═╝░░░╚═╝░░░╚═╝╚═════╝
-    By: Holmabeer²                 goodluck
+    By: Holdmabeers                     goodluck
     ig arrayzzz_    
 """
 
@@ -158,9 +158,10 @@ async def main(urls, max_requests_per_second, wordlist):
         tasks = []
         for url in urls:
             tasks.append(fetch_url(url, session, semaphore, wordlist))
-        results = await asyncio.gather(*tasks)
-
-        for result in results:
+        
+        # Menunggu dan mencetak hasil tiap URL satu per satu
+        for task in asyncio.as_completed(tasks):
+            result = await task
             for res in result:
                 logging.info(res)
 
